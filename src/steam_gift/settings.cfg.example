@@ -1,0 +1,17 @@
+[cookies]
+PHPSESSID = YOUR_PHPSESSID
+
+[user-agent]
+user-agent = YOUR_USER_AGENT
+
+[settings]
+giveaways_from_banners=1
+group=1
+wishlist=1
+recommended=1
+search_list=1
+random_list=1
+send_notify=1
+beep=1
+threshold=10
+silent_mode_at_night=1
