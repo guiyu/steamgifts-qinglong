@@ -1,0 +1,7 @@
+/.superpowers/
+/data/
+/src/steam_gift/settings.cfg
+/src/steam_gift/won.txt
+/src/steam_gift/bad_giveaways.txt
+__pycache__/
+*.py[cod]

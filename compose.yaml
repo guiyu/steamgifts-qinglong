@@ -1,0 +1,16 @@
+services:
+  qinglong:
+    build:
+      context: .
+    image: local/steamgifts-qinglong:2.20.2
+    container_name: steamgifts-qinglong
+    hostname: steamgifts-qinglong
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      QlBaseUrl: /
+    ports:
+      - "127.0.0.1:5700:5700"
+    volumes:
+      - ./data:/ql/data
+      - ./src/steam_gift:/ql/data/scripts/steam_gift
