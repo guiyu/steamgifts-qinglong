@@ -26,9 +26,9 @@ The project contains a Docker Compose service named `qinglong`. A small Dockerfi
 - `beautifulsoup4`
 - `util-linux`, which provides `flock`
 
-Compose uses `restart: unless-stopped`, sets `TZ=Asia/Shanghai`, maps `127.0.0.1:5700` to container port 5700, and mounts `./data` at `/ql/data`. The project does not expose the Docker socket and does not publish the panel to the LAN.
+Compose uses `restart: unless-stopped`, sets `TZ=Asia/Shanghai`, maps `127.0.0.1:5700` to container port 5700, mounts `./data` at `/ql/data`, and mounts `./src/steam_gift` at `/ql/data/scripts/steam_gift`. The project does not expose the Docker socket and does not publish the panel to the LAN.
 
-The supplied bot directory is copied to `data/scripts/steam_gift` on the host. This keeps Qinglong's script editor and logs usable while retaining the files across container replacement.
+The supplied bot directory is kept in `src/steam_gift` on the host and mounted into Qinglong's script directory. The source remains versioned and testable while the credential file and bot-generated state files in that directory are ignored by Git.
 
 ## Project layout
 
@@ -40,16 +40,19 @@ steamgifts-qinglong/
 ├── .gitignore
 ├── README.md
 ├── docs/superpowers/specs/
-└── data/                         # persistent, ignored by Git
-    └── scripts/steam_gift/
-        ├── sg.py
-        ├── notify.py
-        ├── notify.js
-        ├── settings.cfg          # contains credentials; mode 0600
-        ├── search.txt
-        ├── won.txt
-        ├── bad_giveaways_link.txt
-        └── black_list_games_name.txt
+├── tests/
+├── data/                         # Qinglong state, ignored by Git
+└── src/steam_gift/
+    ├── sg.py
+    ├── notify.py
+    ├── notify.js
+    ├── settings.cfg.example      # tracked placeholders only
+    ├── settings.cfg              # ignored credentials; mode 0600
+    ├── search.txt
+    ├── won.txt                   # ignored mutable state
+    ├── bad_giveaways.txt         # ignored generated state
+    ├── bad_giveaways_link.txt
+    └── black_list_games_name.txt
 ```
 
 ## Bot execution model
@@ -68,7 +71,7 @@ The lock prevents overlapping processes if a scan takes longer than one hour. A 
 
 The bot needs exactly two SteamGifts authentication fields: `PHPSESSID` and the matching browser `User-Agent`.
 
-- Values are stored only in `data/scripts/steam_gift/settings.cfg`.
+- Values are stored only in `src/steam_gift/settings.cfg`, which is mounted at `/ql/data/scripts/steam_gift/settings.cfg` inside the container.
 - The file is set to mode `0600`.
 - `data/` is excluded from Git and Docker build context.
 - Values are never copied into Compose, the Dockerfile, README, design documents, commands that print them, or task logs.
@@ -93,7 +96,7 @@ No external push token is configured. Console output remains available in Qinglo
 
 ## Deployment flow
 
-1. Create the project files and extract the supplied bot into the ignored persistent data directory.
+1. Create the project files and extract the supplied bot into the versioned source directory, replacing the supplied credential file with a placeholder example.
 2. Apply the one-run modification to `sg.py` and add focused tests for that behavior.
 3. Build and start the dedicated Qinglong container.
 4. Verify the panel is reachable only through `127.0.0.1:5700`.
