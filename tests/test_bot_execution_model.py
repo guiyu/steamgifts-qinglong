@@ -15,7 +15,7 @@ SOURCE = ROOT / "src" / "steam_gift"
 
 
 class BotExecutionModelTests(unittest.TestCase):
-    def test_script_runs_exactly_one_scan_and_exits(self):
+    def run_bot_with_response(self, status_code=200, response_text=""):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             runtime = temp / "runtime"
@@ -39,13 +39,15 @@ class BotExecutionModelTests(unittest.TestCase):
             )
             (fakes / "requests.py").write_text(
                 textwrap.dedent(
-                    """
+                    f"""
                     class Response:
-                        status_code = 200
-                        text = ""
+                        status_code = {status_code}
+                        text = {response_text!r}
+                        url = "https://www.steamgifts.com/account/settings/profile"
+                        history = []
 
                         def json(self):
-                            return {"type": "success", "points": 100}
+                            return {{"type": "success", "points": 100}}
 
 
                     def get(*_args, **_kwargs):
@@ -126,8 +128,23 @@ class BotExecutionModelTests(unittest.TestCase):
                 timeout=5,
             )
 
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(count_file.read_text(encoding="utf-8"), "1")
+            return result, count_file.read_text(encoding="utf-8")
+
+    def test_script_runs_exactly_one_scan_and_exits(self):
+        result, send_count = self.run_bot_with_response()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(send_count, "1")
+
+    def test_cloudflare_challenge_fails_fast_without_running_scan(self):
+        result, send_count = self.run_bot_with_response(
+            status_code=403,
+            response_text="<title>Just a moment...</title><script>cf-chl</script>",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Cloudflare", result.stdout)
+        self.assertEqual(send_count, "0")
 
     def test_settings_example_contains_only_authentication_placeholders(self):
         config = configparser.ConfigParser()

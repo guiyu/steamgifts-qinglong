@@ -284,10 +284,21 @@ for current_temporary_tuple in temporary_tuple:
 
 #test cookies
 try:
-    r = requests.head("https://www.steamgifts.com/account/settings/profile",cookies=cookie, headers=headers, timeout=120)
+    r = requests.get("https://www.steamgifts.com/account/settings/profile",cookies=cookie, headers=headers, timeout=120)
 except Exception as e:
     print("无法检查 cookie... 可能无法使用 Steamgift 或没有网络连接")
-if r.status_code == 301 or r.status_code == 302:
+    sys.exit(1)
+response_text = r.text.lower()
+cloudflare_blocked = (
+    r.status_code in (403, 429)
+    or "cf-chl" in response_text
+    or "just a moment" in response_text
+)
+profile_unavailable = "/account/settings/profile" not in r.url
+if cloudflare_blocked:
+    set_notify("Cookie 或访问状态无效", "Cloudflare 验证未通过；请先在浏览器完成验证并更新 Cookie")
+    sys.exit(1)
+elif r.status_code != 200 or profile_unavailable:
     set_notify("Cookie 已过期", "请更新您的 cookie")
     sys.exit(1)
 else:
