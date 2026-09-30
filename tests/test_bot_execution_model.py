@@ -15,7 +15,9 @@ SOURCE = ROOT / "src" / "steam_gift"
 
 
 class BotExecutionModelTests(unittest.TestCase):
-    def run_bot_with_response(self, status_code=200, response_text=""):
+    def run_bot_with_response(
+        self, status_code=200, response_text="", use_real_notify=False
+    ):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             runtime = temp / "runtime"
@@ -30,6 +32,8 @@ class BotExecutionModelTests(unittest.TestCase):
                 "black_list_games_name.txt",
             ):
                 shutil.copy(SOURCE / name, runtime / name)
+            if use_real_notify:
+                shutil.copy(SOURCE / "notify.py", runtime / "notify.py")
             shutil.copy(SOURCE / "settings.cfg.example", runtime / "settings.cfg")
             (runtime / "won.txt").write_text("0", encoding="utf-8")
 
@@ -93,23 +97,24 @@ class BotExecutionModelTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (fakes / "notify.py").write_text(
-                textwrap.dedent(
-                    """
-                    import os
-                    from pathlib import Path
+            if not use_real_notify:
+                (fakes / "notify.py").write_text(
+                    textwrap.dedent(
+                        """
+                        import os
+                        from pathlib import Path
 
 
-                    def send(_title, _content):
-                        path = Path(os.environ["BOT_SEND_COUNT"])
-                        count = int(path.read_text() or "0") + 1
-                        path.write_text(str(count))
-                        if count > 1:
-                            raise RuntimeError("bot started a second scan")
-                    """
-                ),
-                encoding="utf-8",
-            )
+                        def send(_title, _content):
+                            path = Path(os.environ["BOT_SEND_COUNT"])
+                            count = int(path.read_text() or "0") + 1
+                            path.write_text(str(count))
+                            if count > 1:
+                                raise RuntimeError("bot started a second scan")
+                        """
+                    ),
+                    encoding="utf-8",
+                )
 
             count_file = temp / "send-count"
             count_file.write_text("0", encoding="utf-8")
@@ -145,6 +150,12 @@ class BotExecutionModelTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Cloudflare", result.stdout)
         self.assertEqual(send_count, "0")
+
+    def test_console_summary_is_not_duplicated_by_notification_module(self):
+        result, _send_count = self.run_bot_with_response(use_real_notify=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count("本轮任务已完成。"), 1)
 
     def test_settings_example_contains_only_authentication_placeholders(self):
         config = configparser.ConfigParser()
