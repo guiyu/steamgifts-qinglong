@@ -16,7 +16,11 @@ SOURCE = ROOT / "src" / "steam_gift"
 
 class BotExecutionModelTests(unittest.TestCase):
     def run_bot_with_response(
-        self, status_code=200, response_text="", use_real_notify=False
+        self,
+        status_code=200,
+        response_text="",
+        use_real_notify=False,
+        add_blank_clearance=False,
     ):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
@@ -35,6 +39,13 @@ class BotExecutionModelTests(unittest.TestCase):
             if use_real_notify:
                 shutil.copy(SOURCE / "notify.py", runtime / "notify.py")
             shutil.copy(SOURCE / "settings.cfg.example", runtime / "settings.cfg")
+            if add_blank_clearance:
+                config = configparser.ConfigParser()
+                config.optionxform = str
+                config.read(runtime / "settings.cfg")
+                config["cookies"]["cf_clearance"] = ""
+                with (runtime / "settings.cfg").open("w", encoding="utf-8") as file:
+                    config.write(file)
             (runtime / "won.txt").write_text("0", encoding="utf-8")
 
             (fakes / "sitecustomize.py").write_text(
@@ -54,7 +65,9 @@ class BotExecutionModelTests(unittest.TestCase):
                             return {{"type": "success", "points": 100}}
 
 
-                    def get(*_args, **_kwargs):
+                    def get(*_args, **kwargs):
+                        if any(value == "" for value in kwargs.get("cookies", {{}}).values()):
+                            raise AssertionError("blank cookies must not be sent")
                         return Response()
 
 
@@ -157,12 +170,18 @@ class BotExecutionModelTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.count("本轮任务已完成。"), 1)
 
+    def test_blank_optional_cookie_is_not_sent(self):
+        result, _send_count = self.run_bot_with_response(add_blank_clearance=True)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_settings_example_contains_only_authentication_placeholders(self):
         config = configparser.ConfigParser()
         config.optionxform = str
         config.read(SOURCE / "settings.cfg.example")
 
         self.assertEqual(config["cookies"]["PHPSESSID"], "YOUR_PHPSESSID")
+        self.assertEqual(config["cookies"]["cf_clearance"], "")
         self.assertEqual(config["user-agent"]["user-agent"], "YOUR_USER_AGENT")
 
     def test_source_compiles(self):

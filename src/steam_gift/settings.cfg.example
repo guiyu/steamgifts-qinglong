@@ -1,5 +1,6 @@
 [cookies]
 PHPSESSID = YOUR_PHPSESSID
+cf_clearance =
 
 [user-agent]
 user-agent = YOUR_USER_AGENT

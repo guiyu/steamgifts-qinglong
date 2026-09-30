@@ -63,13 +63,13 @@ Qinglong will create one task with:
 
 - Name: `SteamGifts auto-entry`
 - Schedule: `0 * * * *`
-- Command: `cd /ql/data/scripts/steam_gift && flock -n /tmp/steamgifts.lock python3 sg.py`
+- Command: `flock -n /tmp/steamgifts.lock bash -lc 'cd /ql/data/scripts/steam_gift && python3 sg.py'`
 
 The lock prevents overlapping processes if a scan takes longer than one hour. A skipped overlapping trigger is acceptable; the next hourly trigger will try again. Container restarts do not immediately force a run but the task resumes at the next hourly boundary.
 
 ## Credentials and secret handling
 
-The bot needs exactly two SteamGifts authentication fields: `PHPSESSID` and the matching browser `User-Agent`.
+The bot needs `PHPSESSID` and the matching browser `User-Agent`. When SteamGifts requires a Cloudflare clearance, it also needs the `cf_clearance` value from that same browser session; the optional field remains blank otherwise.
 
 - Values are stored only in `src/steam_gift/settings.cfg`, which is mounted at `/ql/data/scripts/steam_gift/settings.cfg` inside the container.
 - The file is set to mode `0600`.

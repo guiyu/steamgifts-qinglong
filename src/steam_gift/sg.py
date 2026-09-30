@@ -266,7 +266,11 @@ func_list = []
 
 #get settings from settings.cfg file and initialize the variables
 settings=get_settings()
-cookie = dict(settings._sections['cookies'])
+cookie = {
+    key: value
+    for key, value in settings._sections['cookies'].items()
+    if value.strip()
+}
 headers = dict(settings._sections['user-agent'])
 
 need_send_notify = int(settings['settings']['send_notify'])
