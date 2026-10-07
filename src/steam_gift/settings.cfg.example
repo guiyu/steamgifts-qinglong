@@ -16,3 +16,5 @@ send_notify=1
 beep=1
 threshold=10
 silent_mode_at_night=1
+min_positive_percent=80
+min_review_count=100

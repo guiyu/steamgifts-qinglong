@@ -8,6 +8,8 @@ import sys
 from subprocess import call
 import configparser
 from notify import send
+from reviews import SteamReviewCatalog, extract_app_id
+from selection import Candidate, is_qualified, select_candidates
 
 requests = curl_requests.Session(impersonate="chrome")
 
@@ -95,38 +97,85 @@ def get_requests(cookie, req_type, headers):
 
 
 def get_game_links(requests_result):
-    """call enter_geaways and extract link"""
+    """Collect review-backed giveaway candidates without entering them."""
     soup = BeautifulSoup(requests_result.text, "html.parser")
     link = soup.find_all(class_="giveaway__heading__name")
     for get_link in link:
         geaway_link = get_link.get("href")
-        if geaway_link not in entered_url:
-            if not need_giveaways_from_banners and geaway_link in giveaways_from_banner:
-                continue
-            entered_url.append(geaway_link)
-            geaway_link = "https://www.steamgifts.com" + geaway_link
-            print(f"使用链接: {geaway_link}")
-            if geaway_link not in bad_giveaways_link:
-                if enter_geaway(geaway_link):
-                    break
-            else:
-                print(f"赠品 URL 已列入黑名单: {geaway_link[geaway_link.rfind('/') + 1:]}")
+        if not geaway_link or geaway_link in entered_url:
+            continue
+        if not need_giveaways_from_banners and geaway_link in giveaways_from_banner:
+            continue
+
+        full_url = "https://www.steamgifts.com" + geaway_link
+        if full_url in bad_giveaways_link:
+            print(f"赠品 URL 已列入黑名单: {full_url[full_url.rfind('/') + 1:]}")
+            continue
+
+        code_match = re.match(r"^/giveaway/([^/]+)/", geaway_link)
+        if code_match and code_match.group(1) in candidate_by_code:
+            continue
+        row = (
+            get_link.find_parent(class_="giveaway__row-outer-wrap")
+            or get_link.find_parent(class_="giveaway__row-inner-wrap")
+            or get_link.parent
+        )
+        points_match = re.search(r"\((\d+)P\)", row.get_text(" ", strip=True))
+        steam_link = row.find(
+            "a", href=re.compile(r"^https://store\.steampowered\.com/app/")
+        )
+        app_id = extract_app_id(steam_link.get("href") if steam_link else "")
+        if not code_match or not points_match or app_id is None:
+            print(f"跳过缺少 Steam App ID 或点数的赠品: {geaway_link}")
+            continue
+
+        review = review_catalog.get(app_id)
+        if review is None:
+            print(f"跳过没有可靠 Steam 评测数据的赠品: {geaway_link}")
+            continue
+
+        candidate = Candidate(
+            code=code_match.group(1),
+            url=full_url,
+            points=int(points_match.group(1)),
+            app_id=app_id,
+            review=review,
+        )
+        candidate_by_code.setdefault(candidate.code, candidate)
+
+
+def enter_qualified_candidates(candidates, budget):
+    """Enter an optimal set and re-plan after every failed attempt."""
+    remaining = {candidate.code: candidate for candidate in candidates}
+    entered_count = 0
+    while remaining and budget > 0:
+        selected = select_candidates(list(remaining.values()), budget)
+        if not selected:
+            break
+        for candidate in selected:
+            remaining.pop(candidate.code, None)
+            new_budget = enter_geaway(candidate.url)
+            if new_budget is None:
+                budget = get_coins()
+                break
+            budget = new_budget
+            entered_count += 1
+    return budget, entered_count
 
 
 def enter_geaway(geaway_link):
     """enter to giveaway"""
-    global i_want_to_sleep
     bad_counter = good_counter = 0
     try:
         r = requests.get(geaway_link, cookies=cookie, headers=headers, timeout=120)
         if r.status_code != 200:
             set_notify("站点错误", f"错误代码: {r.status_code}", separator=". ")
             time.sleep(300)
-            return False
+            return None
     except:
         print("网站不可用")
         time.sleep(300)
-        return False
+        return None
     soup_enter = BeautifulSoup(r.text, "html.parser")
     for bad_word in forbidden_words:
         bad_counter += len(re.findall(bad_word, r.text, flags=re.IGNORECASE))
@@ -137,7 +186,7 @@ def enter_geaway(geaway_link):
             print("这是个陷阱，网站检测到我是机器人!")
             with open("bad_giveaways.txt", "a") as bad_giveaways:
                 bad_giveaways.write(geaway_link + "\n")
-            return False
+            return None
         if bad_counter == good_counter:
             set_notify("提示", f"成功打开赠品链接： {geaway_link}", separator="! ")
     try:
@@ -146,13 +195,13 @@ def enter_geaway(geaway_link):
         game = "Unknown game"
     if game in bad_games_name:
         print(f"游戏来自黑名单。忽略: {game} ")
-        return False
+        return None
     try:
         link = soup_enter.find(class_="sidebar").form
     except Exception as e:
         print(f"未知错误: {e}")
-        return False
-    if link != None:
+        return None
+    if link is not None:
         link = link.find_all("input")
         params = {"xsrf_token": link[0].get("value"), "do": "entry_insert", "code": link[2].get("value")}
         try:
@@ -161,37 +210,31 @@ def enter_geaway(geaway_link):
         except:
             print("网站不可用...")
             time.sleep(300)
-            return False
+            return None
         if extract_coins["type"] == "success":
             coins = extract_coins["points"]
             set_notify("机器人参加了游戏赠品活动：", re.sub("&", '', game) + f"。 剩余硬币: {coins}", separator="")
             time.sleep(random.randint(1, 120))
-            return False
-        elif extract_coins["msg"] == "Not Enough Points":
-            coins = get_coins()
-            if coins < 10:
-                i_want_to_sleep = True
-                print(f"没有足够的硬币参加 {geaway_link}")
-                return True
-            return False
+            return int(coins)
+        elif extract_coins.get("msg") == "Not Enough Points":
+            print(f"没有足够的硬币参加 {geaway_link}")
+            return None
     else:
         link = soup_enter.find(class_="sidebar__error is-disabled")
-        if link != None and link.get_text() == " Not Enough Points":
+        if link is not None and link.get_text() == " Not Enough Points":
             print(f"没有足够的硬币参加 {geaway_link}")
             time.sleep(random.randint(5, 60))
-            if get_coins() < 10:
-                i_want_to_sleep = True
-                return True
+            return None
         else:
             link = soup_enter.select("div.featured__column span")
-            if link != None:
+            if link:
                 print(f"赠品活动已结束。Bot 无法及时参与: {geaway_link}. 结束: {link[0].text}")
                 time.sleep(random.randint(5, 60))
-                return False
+                return None
             else:
                 set_notify("严重错误!", f"链接: {link}", separator="")
-                return False
-        return False
+                return None
+        return None
 
 
 def get_coins():
@@ -280,6 +323,8 @@ need_giveaways_from_banners = int(settings['settings']['giveaways_from_banners']
 threshold = int(settings['settings']['threshold'])
 need_beep = int(settings['settings']['beep'])
 silent_mode_at_night = int(settings['settings']['silent_mode_at_night'])
+min_positive_percent = int(settings['settings']['min_positive_percent'])
+min_review_count = int(settings['settings']['min_review_count'])
 
 temporary_tuple = ("wishlist", "search_list", "recommended", "group", "random_list")
 for current_temporary_tuple in temporary_tuple:
@@ -328,19 +373,29 @@ set_notify("Steam gifts 脚本启动", f"硬币总量: {coins}")
 forbidden_words = (" ban", " fake", " bot", " not enter", " don't enter")
 good_words = (" bank", " banan", " both", " band", " banner", " bang"," bots?")
 giveaways_from_banner = []
+candidate_by_code = {}
+review_catalog = SteamReviewCatalog(requests)
 
 
 if not need_giveaways_from_banners:
     get_games_from_banners()
-i_want_to_sleep = False
 for current_func_list in func_list:
     get_requests(cookie, current_func_list,headers)
-    if i_want_to_sleep:
-        set_notify("硬币太少...", "", separator="")
-        break
+qualified_candidates = [
+    candidate
+    for candidate in candidate_by_code.values()
+    if is_qualified(
+        candidate.review,
+        min_percent=min_positive_percent,
+        min_reviews=min_review_count,
+    )
+]
+for candidate in candidate_by_code.values():
+    if candidate not in qualified_candidates:
+        print(f"跳过未达到评测门槛的赠品: {candidate.code}")
+coins, entered_count = enter_qualified_candidates(qualified_candidates, coins)
 won_count = check_won(won_count)
 coins = get_coins()
-if not i_want_to_sleep:
-    set_notify("参加了所有的赠品活动...",  f"剩余硬币: {coins}")
+set_notify("符合评测门槛的赠品处理完毕", f"本轮参加: {entered_count}，剩余硬币: {coins}")
 set_notify("本轮任务已完成。", f"剩余硬币: {coins}", separator=" ")
 send("SteamGifts机器人",notify_push)

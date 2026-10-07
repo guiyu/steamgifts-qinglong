@@ -33,6 +33,8 @@ class BotExecutionModelTests(unittest.TestCase):
 
             for name in (
                 "sg.py",
+                "selection.py",
+                "reviews.py",
                 "search.txt",
                 "bad_giveaways_link.txt",
                 "black_list_games_name.txt",
@@ -186,6 +188,149 @@ class BotExecutionModelTests(unittest.TestCase):
 
             return result, count_file.read_text(encoding="utf-8")
 
+    def run_quality_scenario(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            runtime = temp / "runtime"
+            fakes = temp / "fakes"
+            runtime.mkdir()
+            (fakes / "curl_cffi").mkdir(parents=True)
+
+            for name in (
+                "sg.py",
+                "selection.py",
+                "reviews.py",
+                "search.txt",
+                "bad_giveaways_link.txt",
+                "black_list_games_name.txt",
+            ):
+                shutil.copy(SOURCE / name, runtime / name)
+            shutil.copy(SOURCE / "settings.cfg.example", runtime / "settings.cfg")
+            config = configparser.ConfigParser()
+            config.optionxform = str
+            config.read(runtime / "settings.cfg")
+            for mode in ("group", "recommended", "search_list", "random_list"):
+                config["settings"][mode] = "0"
+            config["settings"]["wishlist"] = "1"
+            config["settings"]["min_positive_percent"] = "80"
+            config["settings"]["min_review_count"] = "100"
+            with (runtime / "settings.cfg").open("w", encoding="utf-8") as file:
+                config.write(file)
+            (runtime / "won.txt").write_text("0", encoding="utf-8")
+
+            (fakes / "sitecustomize.py").write_text(
+                "import time\ntime.sleep = lambda _seconds: None\n",
+                encoding="utf-8",
+            )
+            (fakes / "notify.py").write_text(
+                "def send(_title, _content):\n    return None\n",
+                encoding="utf-8",
+            )
+            (fakes / "curl_cffi" / "__init__.py").write_text(
+                "from . import requests\n",
+                encoding="utf-8",
+            )
+            (fakes / "curl_cffi" / "requests.py").write_text(
+                textwrap.dedent(
+                    """
+                    import os
+                    from pathlib import Path
+
+
+                    EVENTS = Path(os.environ["BOT_EVENTS"])
+                    LISTING = """
+                    + repr(
+                        """
+                        <html><body>
+                          <div class="nav__points">400</div>
+                          <div class="giveaway__row-outer-wrap">
+                            <a class="giveaway__heading__name" href="/giveaway/good1/good-game">Good Game</a>
+                            <span class="giveaway__heading__thin">(3P)</span>
+                            <a href="https://store.steampowered.com/app/101?utm_source=SteamGifts">Steam</a>
+                          </div>
+                          <div class="giveaway__row-outer-wrap">
+                            <a class="giveaway__heading__name" href="/giveaway/low01/low-game">Low Game</a>
+                            <span class="giveaway__heading__thin">(3P)</span>
+                            <a href="https://store.steampowered.com/app/202">Steam</a>
+                          </div>
+                        </body></html>
+                        """
+                    )
+                    + """
+
+
+                    def record(value):
+                        with EVENTS.open("a", encoding="utf-8") as file:
+                            file.write(value + "\\n")
+
+
+                    class Response:
+                        def __init__(self, text="", url="", payload=None, status_code=200):
+                            self.text = text
+                            self.url = url
+                            self.payload = payload
+                            self.status_code = status_code
+                            self.history = []
+
+                        def json(self):
+                            return self.payload
+
+
+                    class Session:
+                        def __init__(self, impersonate=None):
+                            self.impersonate = impersonate
+
+                        def get(self, url, **_kwargs):
+                            if "/appreviews/" in url:
+                                app_id = int(url.rsplit("/", 1)[1])
+                                record(f"review:{app_id}")
+                                positive = 90 if app_id == 101 else 79
+                                return Response(payload={
+                                    "success": 1,
+                                    "query_summary": {
+                                        "total_positive": positive,
+                                        "total_reviews": 100,
+                                    },
+                                })
+                            if "/account/settings/profile" in url:
+                                return Response(url=url)
+                            if "/giveaways/entered/" in url:
+                                return Response("<html></html>", url)
+                            if "/giveaway/" in url:
+                                code = url.split("/giveaway/", 1)[1].split("/", 1)[0]
+                                return Response(
+                                    f"<html><title>{code}</title><div class='sidebar'><form>"
+                                    f"<input value='token'><input value='unused'><input value='{code}'>"
+                                    "</form></div></html>",
+                                    url,
+                                )
+                            return Response(LISTING, url)
+
+                        def post(self, _url, data=None, **_kwargs):
+                            record(f"post:{data['code']}")
+                            return Response(payload={"type": "success", "points": 397})
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            events_file = temp / "events"
+            events_file.write_text("", encoding="utf-8")
+            env = os.environ.copy()
+            env["BOT_EVENTS"] = str(events_file)
+            env["PYTHONPATH"] = os.pathsep.join(
+                filter(None, (str(fakes), env.get("PYTHONPATH")))
+            )
+            result = subprocess.run(
+                [sys.executable, "sg.py"],
+                cwd=runtime,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result, events_file.read_text(encoding="utf-8").splitlines()
+
     def test_script_runs_exactly_one_scan_and_exits(self):
         result, send_count = self.run_bot_with_response()
 
@@ -228,6 +373,23 @@ class BotExecutionModelTests(unittest.TestCase):
         self.assertEqual(config["cookies"]["PHPSESSID"], "YOUR_PHPSESSID")
         self.assertEqual(config["cookies"]["cf_clearance"], "")
         self.assertEqual(config["user-agent"]["user-agent"], "YOUR_USER_AGENT")
+
+    def test_settings_enable_exact_quality_thresholds(self):
+        config = configparser.ConfigParser()
+        config.read(SOURCE / "settings.cfg.example")
+
+        self.assertEqual(config.getint("settings", "min_positive_percent"), 80)
+        self.assertEqual(config.getint("settings", "min_review_count"), 100)
+
+    def test_collects_all_reviews_before_entering_only_qualified_game(self):
+        result, events = self.run_quality_scenario()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("review:101", events)
+        self.assertIn("review:202", events)
+        self.assertEqual([event for event in events if event.startswith("post:")], ["post:good1"])
+        first_post = next(index for index, event in enumerate(events) if event.startswith("post:"))
+        self.assertTrue(all(event.startswith("review:") for event in events[:first_post]))
 
     def test_source_compiles(self):
         with tempfile.TemporaryDirectory() as temp_dir:
