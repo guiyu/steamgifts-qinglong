@@ -40,6 +40,9 @@ class SteamReviewCatalog:
         self.session = session
         self.timeout = timeout
         self._cache: dict[int, ReviewSummary | None] = {}
+        self.request_failures = 0
+        self.invalid_responses = 0
+        self.successful_responses = 0
 
     def get(self, app_id: int) -> ReviewSummary | None:
         if app_id in self._cache:
@@ -57,8 +60,13 @@ class SteamReviewCatalog:
                 timeout=self.timeout,
             )
             summary = parse_review_summary(response.json())
+            if summary is None:
+                self.invalid_responses += 1
+            else:
+                self.successful_responses += 1
         except Exception:
             summary = None
+            self.request_failures += 1
 
         self._cache[app_id] = summary
         return summary

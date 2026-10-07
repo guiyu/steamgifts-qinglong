@@ -2,18 +2,30 @@
 import time
 from curl_cffi import requests as curl_requests
 import random
+import os
 from bs4 import BeautifulSoup
 import re
-import sys
 from subprocess import call
 import configparser
+from datetime import datetime, timezone
+from pathlib import Path
 from notify import send
+from heartbeat import Heartbeat, write_heartbeat
 from reviews import SteamReviewCatalog, extract_app_id
 from selection import Candidate, is_qualified, select_candidates
 
-requests = curl_requests.Session(impersonate="chrome")
+requests = None
+notify_push = ""
 
 version = "1.4.9"
+
+
+class AuthenticationBlocked(Exception):
+    pass
+
+
+class SiteError(Exception):
+    pass
 
 #determine was script installed by apt-package or was clonned via git clone
 
@@ -147,6 +159,7 @@ def get_game_links(requests_result):
 def enter_qualified_candidates(candidates, budget):
     """Enter an optimal set and re-plan after every failed attempt."""
     remaining = {candidate.code: candidate for candidate in candidates}
+    selected_count = 0
     entered_count = 0
     while remaining and budget > 0:
         selected = select_candidates(list(remaining.values()), budget)
@@ -154,13 +167,14 @@ def enter_qualified_candidates(candidates, budget):
             break
         for candidate in selected:
             remaining.pop(candidate.code, None)
+            selected_count += 1
             new_budget = enter_geaway(candidate.url)
             if new_budget is None:
                 budget = get_coins()
                 break
             budget = new_budget
             entered_count += 1
-    return budget, entered_count
+    return budget, selected_count, entered_count
 
 
 def enter_geaway(geaway_link):
@@ -302,100 +316,182 @@ def get_games_from_banners():
 
 
 
-notify_push = ""
+def run_bot(context):
+    global bad_games_name, bad_giveaways_link, candidate_by_code, cookie
+    global entered_url, forbidden_words, func_list, giveaways_from_banner
+    global good_words, headers, min_positive_percent, min_review_count
+    global need_giveaways_from_banners, notify_push, requests, review_catalog
+    global threshold, what_search
 
-set_notify("脚本启动","——————————")
-#check_new_version(version)
-time.sleep(60)
-func_list = []
+    notify_push = ""
+    requests = curl_requests.Session(impersonate="chrome")
+    set_notify("脚本启动", "——————————")
+    time.sleep(60)
 
-#get settings from settings.cfg file and initialize the variables
-settings=get_settings()
-cookie = {
-    key: value
-    for key, value in settings._sections['cookies'].items()
-    if value.strip()
-}
-headers = dict(settings._sections['user-agent'])
-
-need_send_notify = int(settings['settings']['send_notify'])
-need_giveaways_from_banners = int(settings['settings']['giveaways_from_banners'])
-threshold = int(settings['settings']['threshold'])
-need_beep = int(settings['settings']['beep'])
-silent_mode_at_night = int(settings['settings']['silent_mode_at_night'])
-min_positive_percent = int(settings['settings']['min_positive_percent'])
-min_review_count = int(settings['settings']['min_review_count'])
-
-temporary_tuple = ("wishlist", "search_list", "recommended", "group", "random_list")
-for current_temporary_tuple in temporary_tuple:
-    if int(settings['settings'][current_temporary_tuple]):
-        func_list.append(current_temporary_tuple)
-
-
-
-#test cookies
-try:
-    r = requests.get("https://www.steamgifts.com/account/settings/profile",cookies=cookie, headers=headers, timeout=120)
-except Exception as e:
-    print("无法检查 cookie... 可能无法使用 Steamgift 或没有网络连接")
-    sys.exit(1)
-response_text = r.text.lower()
-cloudflare_blocked = (
-    r.status_code in (403, 429)
-    or "cf-chl" in response_text
-    or "just a moment" in response_text
-)
-profile_unavailable = "/account/settings/profile" not in r.url
-if cloudflare_blocked:
-    set_notify("Cookie 或访问状态无效", "Cloudflare 验证未通过；请先在浏览器完成验证并更新 Cookie")
-    sys.exit(1)
-elif r.status_code != 200 or profile_unavailable:
-    set_notify("Cookie 已过期", "请更新您的 cookie")
-    sys.exit(1)
-else:
-    set_notify("Cookies 没问题", "继续")
-    del(r)
-
-
-#read various variables from files
-with open("search.txt") as f: what_search = f.read().splitlines()
-with open("black_list_games_name.txt") as f: bad_games_name = f.read().splitlines()
-with open("bad_giveaways_link.txt") as f: bad_giveaways_link = f.read().splitlines()
-
-#sleep and get currnt count of coins
-time.sleep(random.randint(2, 10))
-coins = get_coins()
-
-entered_url = get_requests(cookie, "enteredlist", headers)
-# func_list=("wishlist", "search", "someone")
-won_count = work_with_win_file(False, 0)
-set_notify("Steam gifts 脚本启动", f"硬币总量: {coins}")
-forbidden_words = (" ban", " fake", " bot", " not enter", " don't enter")
-good_words = (" bank", " banan", " both", " band", " banner", " bang"," bots?")
-giveaways_from_banner = []
-candidate_by_code = {}
-review_catalog = SteamReviewCatalog(requests)
-
-
-if not need_giveaways_from_banners:
-    get_games_from_banners()
-for current_func_list in func_list:
-    get_requests(cookie, current_func_list,headers)
-qualified_candidates = [
-    candidate
-    for candidate in candidate_by_code.values()
-    if is_qualified(
-        candidate.review,
-        min_percent=min_positive_percent,
-        min_reviews=min_review_count,
+    settings = get_settings()
+    cookie = {
+        key: value
+        for key, value in settings._sections["cookies"].items()
+        if value.strip()
+    }
+    headers = dict(settings._sections["user-agent"])
+    need_giveaways_from_banners = int(
+        settings["settings"]["giveaways_from_banners"]
     )
-]
-for candidate in candidate_by_code.values():
-    if candidate not in qualified_candidates:
-        print(f"跳过未达到评测门槛的赠品: {candidate.code}")
-coins, entered_count = enter_qualified_candidates(qualified_candidates, coins)
-won_count = check_won(won_count)
-coins = get_coins()
-set_notify("符合评测门槛的赠品处理完毕", f"本轮参加: {entered_count}，剩余硬币: {coins}")
-set_notify("本轮任务已完成。", f"剩余硬币: {coins}", separator=" ")
-send("SteamGifts机器人",notify_push)
+    threshold = int(settings["settings"]["threshold"])
+    min_positive_percent = int(settings["settings"]["min_positive_percent"])
+    min_review_count = int(settings["settings"]["min_review_count"])
+
+    func_list = []
+    for mode in ("wishlist", "search_list", "recommended", "group", "random_list"):
+        if int(settings["settings"][mode]):
+            func_list.append(mode)
+
+    try:
+        response = requests.get(
+            "https://www.steamgifts.com/account/settings/profile",
+            cookies=cookie,
+            headers=headers,
+            timeout=120,
+        )
+    except Exception as error:
+        raise SiteError("profile_unavailable") from error
+
+    response_text = response.text.lower()
+    cloudflare_blocked = (
+        response.status_code in (403, 429)
+        or "cf-chl" in response_text
+        or "just a moment" in response_text
+    )
+    profile_unavailable = "/account/settings/profile" not in response.url
+    if cloudflare_blocked:
+        set_notify(
+            "Cookie 或访问状态无效",
+            "Cloudflare 验证未通过；请先在浏览器完成验证并更新 Cookie",
+        )
+        raise AuthenticationBlocked("cloudflare_or_authentication")
+    if response.status_code != 200 or profile_unavailable:
+        set_notify("Cookie 已过期", "请更新您的 cookie")
+        raise AuthenticationBlocked("cloudflare_or_authentication")
+    set_notify("Cookies 没问题", "继续")
+
+    with open("search.txt") as file:
+        what_search = file.read().splitlines()
+    with open("black_list_games_name.txt") as file:
+        bad_games_name = file.read().splitlines()
+    with open("bad_giveaways_link.txt") as file:
+        bad_giveaways_link = file.read().splitlines()
+
+    time.sleep(random.randint(2, 10))
+    coins = get_coins()
+    context["points_before"] = coins
+    context["points_after"] = coins
+
+    entered_url = get_requests(cookie, "enteredlist", headers) or []
+    won_count = work_with_win_file(False, 0)
+    set_notify("Steam gifts 脚本启动", f"硬币总量: {coins}")
+    forbidden_words = (" ban", " fake", " bot", " not enter", " don't enter")
+    good_words = (" bank", " banan", " both", " band", " banner", " bang", " bots?")
+    giveaways_from_banner = []
+    candidate_by_code = {}
+    review_catalog = SteamReviewCatalog(requests)
+
+    if not need_giveaways_from_banners:
+        get_games_from_banners()
+    for mode in func_list:
+        get_requests(cookie, mode, headers)
+
+    review_attempts = (
+        review_catalog.successful_responses
+        + review_catalog.invalid_responses
+        + review_catalog.request_failures
+    )
+    if review_attempts and review_catalog.successful_responses == 0:
+        raise SiteError("steam_review_unavailable")
+
+    qualified_candidates = [
+        candidate
+        for candidate in candidate_by_code.values()
+        if is_qualified(
+            candidate.review,
+            min_percent=min_positive_percent,
+            min_reviews=min_review_count,
+        )
+    ]
+    context["eligible_count"] = len(qualified_candidates)
+    for candidate in candidate_by_code.values():
+        if candidate not in qualified_candidates:
+            print(f"跳过未达到评测门槛的赠品: {candidate.code}")
+
+    coins, selected_count, entered_count = enter_qualified_candidates(
+        qualified_candidates, coins
+    )
+    context["selected_count"] = selected_count
+    context["entered_count"] = entered_count
+    check_won(won_count)
+    coins = get_coins()
+    context["points_after"] = coins
+    set_notify(
+        "符合评测门槛的赠品处理完毕",
+        f"本轮参加: {entered_count}，剩余硬币: {coins}",
+    )
+    set_notify("本轮任务已完成。", f"剩余硬币: {coins}", separator=" ")
+    send("SteamGifts机器人", notify_push)
+
+    if qualified_candidates:
+        return "success", "completed"
+    return "no_eligible_giveaways", "no_qualified_candidates"
+
+
+def main():
+    started_at = datetime.now(timezone.utc).isoformat()
+    heartbeat_path = Path(
+        os.environ.get(
+            "STEAMGIFTS_HEARTBEAT_PATH",
+            "/ql/data/watchdog/bot-heartbeat.json",
+        )
+    )
+    context = {
+        "eligible_count": 0,
+        "selected_count": 0,
+        "entered_count": 0,
+        "points_before": 0,
+        "points_after": 0,
+    }
+
+    def finish(status, reason):
+        write_heartbeat(
+            heartbeat_path,
+            Heartbeat(
+                schema_version=1,
+                started_at=started_at,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                status=status,
+                reason=reason,
+                eligible_count=context["eligible_count"],
+                selected_count=context["selected_count"],
+                entered_count=context["entered_count"],
+                points_before=context["points_before"],
+                points_after=context["points_after"],
+                process_id=os.getpid(),
+            ),
+        )
+
+    try:
+        status, reason = run_bot(context)
+    except AuthenticationBlocked:
+        finish("authentication_blocked", "cloudflare_or_authentication")
+        return 1
+    except SiteError as error:
+        finish("site_error", str(error))
+        return 1
+    except Exception:
+        finish("internal_error", "unexpected_failure")
+        raise
+
+    finish(status, reason)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

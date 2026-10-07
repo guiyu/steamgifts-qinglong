@@ -1,4 +1,5 @@
 /.superpowers/
+/data/watchdog/
 /data/
 /src/steam_gift/settings.cfg
 /src/steam_gift/won.txt

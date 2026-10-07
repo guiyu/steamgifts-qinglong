@@ -51,6 +51,9 @@ class DeploymentContractTests(unittest.TestCase):
     def test_runtime_state_is_ignored_by_git(self):
         ignored_paths = (
             "data/example",
+            "data/watchdog/bot-heartbeat.json",
+            "data/watchdog/state.json",
+            "data/watchdog/watchdog.log",
             "src/steam_gift/settings.cfg",
             "src/steam_gift/won.txt",
             "src/steam_gift/bad_giveaways.txt",

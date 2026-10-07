@@ -22,6 +22,8 @@ class BotExecutionModelTests(unittest.TestCase):
         use_real_notify=False,
         add_blank_clearance=False,
         require_browser_client=False,
+        response_url="https://www.steamgifts.com/account/settings/profile",
+        return_heartbeat=False,
     ):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
@@ -35,6 +37,7 @@ class BotExecutionModelTests(unittest.TestCase):
                 "sg.py",
                 "selection.py",
                 "reviews.py",
+                "heartbeat.py",
                 "search.txt",
                 "bad_giveaways_link.txt",
                 "black_list_games_name.txt",
@@ -61,7 +64,7 @@ class BotExecutionModelTests(unittest.TestCase):
                     class Response:
                         status_code = {status_code}
                         text = {response_text!r}
-                        url = "https://www.steamgifts.com/account/settings/profile"
+                        url = {response_url!r}
                         history = []
 
                         def json(self):
@@ -173,6 +176,8 @@ class BotExecutionModelTests(unittest.TestCase):
             count_file.write_text("0", encoding="utf-8")
             env = os.environ.copy()
             env["BOT_SEND_COUNT"] = str(count_file)
+            heartbeat_path = temp / "bot-heartbeat.json"
+            env["STEAMGIFTS_HEARTBEAT_PATH"] = str(heartbeat_path)
             env["PYTHONPATH"] = os.pathsep.join(
                 filter(None, (str(fakes), env.get("PYTHONPATH")))
             )
@@ -186,9 +191,16 @@ class BotExecutionModelTests(unittest.TestCase):
                 timeout=5,
             )
 
+            if return_heartbeat:
+                heartbeat = (
+                    __import__("json").loads(heartbeat_path.read_text(encoding="utf-8"))
+                    if heartbeat_path.exists()
+                    else None
+                )
+                return result, count_file.read_text(encoding="utf-8"), heartbeat
             return result, count_file.read_text(encoding="utf-8")
 
-    def run_quality_scenario(self):
+    def run_quality_scenario(self, review_failure=False):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             runtime = temp / "runtime"
@@ -200,6 +212,7 @@ class BotExecutionModelTests(unittest.TestCase):
                 "sg.py",
                 "selection.py",
                 "reviews.py",
+                "heartbeat.py",
                 "search.txt",
                 "bad_giveaways_link.txt",
                 "black_list_games_name.txt",
@@ -257,6 +270,7 @@ class BotExecutionModelTests(unittest.TestCase):
                         """
                     )
                     + """
+                    REVIEW_FAILURE = __REVIEW_FAILURE__
 
 
                     def record(value):
@@ -284,6 +298,8 @@ class BotExecutionModelTests(unittest.TestCase):
                             if "/appreviews/" in url:
                                 app_id = int(url.rsplit("/", 1)[1])
                                 record(f"review:{app_id}")
+                                if REVIEW_FAILURE:
+                                    raise RuntimeError("review service unavailable")
                                 positive = 90 if app_id == 101 else 79
                                 return Response(payload={
                                     "success": 1,
@@ -310,7 +326,7 @@ class BotExecutionModelTests(unittest.TestCase):
                             record(f"post:{data['code']}")
                             return Response(payload={"type": "success", "points": 397})
                     """
-                ),
+                ).replace("__REVIEW_FAILURE__", repr(review_failure)),
                 encoding="utf-8",
             )
 
@@ -318,6 +334,8 @@ class BotExecutionModelTests(unittest.TestCase):
             events_file.write_text("", encoding="utf-8")
             env = os.environ.copy()
             env["BOT_EVENTS"] = str(events_file)
+            heartbeat_path = temp / "bot-heartbeat.json"
+            env["STEAMGIFTS_HEARTBEAT_PATH"] = str(heartbeat_path)
             env["PYTHONPATH"] = os.pathsep.join(
                 filter(None, (str(fakes), env.get("PYTHONPATH")))
             )
@@ -329,7 +347,12 @@ class BotExecutionModelTests(unittest.TestCase):
                 text=True,
                 timeout=5,
             )
-            return result, events_file.read_text(encoding="utf-8").splitlines()
+            heartbeat = (
+                __import__("json").loads(heartbeat_path.read_text(encoding="utf-8"))
+                if heartbeat_path.exists()
+                else None
+            )
+            return result, events_file.read_text(encoding="utf-8").splitlines(), heartbeat
 
     def test_script_runs_exactly_one_scan_and_exits(self):
         result, send_count = self.run_bot_with_response()
@@ -382,7 +405,7 @@ class BotExecutionModelTests(unittest.TestCase):
         self.assertEqual(config.getint("settings", "min_review_count"), 100)
 
     def test_collects_all_reviews_before_entering_only_qualified_game(self):
-        result, events = self.run_quality_scenario()
+        result, events, _heartbeat = self.run_quality_scenario()
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("review:101", events)
@@ -391,6 +414,42 @@ class BotExecutionModelTests(unittest.TestCase):
         first_post = next(index for index, event in enumerate(events) if event.startswith("post:"))
         self.assertTrue(all(event.startswith("review:") for event in events[:first_post]))
 
+    def test_writes_success_and_no_eligible_terminal_statuses(self):
+        success, _events, success_heartbeat = self.run_quality_scenario()
+        empty, _send_count, empty_heartbeat = self.run_bot_with_response(
+            return_heartbeat=True
+        )
+
+        self.assertEqual(success.returncode, 0, success.stdout + success.stderr)
+        self.assertEqual(success_heartbeat["status"], "success")
+        self.assertEqual(empty.returncode, 0, empty.stdout + empty.stderr)
+        self.assertEqual(empty_heartbeat["status"], "no_eligible_giveaways")
+
+    def test_writes_authentication_and_review_site_failure_statuses(self):
+        blocked, _send_count, blocked_heartbeat = self.run_bot_with_response(
+            status_code=403,
+            response_text="<title>Just a moment...</title><script>cf-chl</script>",
+            return_heartbeat=True,
+        )
+        review_failure, events, review_heartbeat = self.run_quality_scenario(
+            review_failure=True
+        )
+
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertEqual(blocked_heartbeat["status"], "authentication_blocked")
+        self.assertNotEqual(review_failure.returncode, 0)
+        self.assertEqual(review_heartbeat["status"], "site_error")
+        self.assertFalse(any(event.startswith("post:") for event in events))
+
+    def test_unexpected_exception_writes_internal_error_and_returns_nonzero(self):
+        result, _send_count, heartbeat = self.run_bot_with_response(
+            response_url=None,
+            return_heartbeat=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(heartbeat["status"], "internal_error")
+
     def test_source_compiles(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             py_compile.compile(
@@ -398,6 +457,39 @@ class BotExecutionModelTests(unittest.TestCase):
                 cfile=str(Path(temp_dir) / "sg.pyc"),
                 doraise=True,
             )
+
+    def test_import_is_side_effect_free(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            fakes = temp / "fakes"
+            (fakes / "curl_cffi").mkdir(parents=True)
+            (fakes / "curl_cffi" / "__init__.py").write_text(
+                "from . import requests\n", encoding="utf-8"
+            )
+            (fakes / "curl_cffi" / "requests.py").write_text(
+                "class Session:\n    def __init__(self, *_args, **_kwargs):\n"
+                "        raise AssertionError('session created during import')\n",
+                encoding="utf-8",
+            )
+            (fakes / "notify.py").write_text(
+                "def send(*_args, **_kwargs):\n    raise AssertionError('send during import')\n",
+                encoding="utf-8",
+            )
+            heartbeat_path = temp / "heartbeat.json"
+            env = os.environ.copy()
+            env["STEAMGIFTS_HEARTBEAT_PATH"] = str(heartbeat_path)
+            env["PYTHONPATH"] = os.pathsep.join((str(fakes), str(SOURCE)))
+
+            result = subprocess.run(
+                [sys.executable, "-c", "import sg"],
+                cwd=temp,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(heartbeat_path.exists())
 
 
 if __name__ == "__main__":
