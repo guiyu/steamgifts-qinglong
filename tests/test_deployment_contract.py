@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -67,6 +68,14 @@ class DeploymentContractTests(unittest.TestCase):
                     cwd=ROOT,
                 )
                 self.assertEqual(result.returncode, 0, f"not ignored: {path}")
+
+    def test_watchdog_installer_is_executable_and_starts_with_safe_check(self):
+        installer = ROOT / "scripts" / "install-watchdog.sh"
+        source = installer.read_text(encoding="utf-8")
+
+        self.assertTrue(os.access(installer, os.X_OK))
+        self.assertIn("--check-only --no-notify", source)
+        self.assertIn("WATCHDOG_LAUNCH_AGENTS_DIR", source)
 
 
 if __name__ == "__main__":

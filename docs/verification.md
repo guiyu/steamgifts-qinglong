@@ -58,3 +58,17 @@ After `docker compose restart qinglong`:
 - The generated Qinglong crontab retained the enabled hourly entry.
 - Python dependencies and `flock` remained available.
 - No duplicate or orphaned `sg.py` process remained.
+
+## 2026-10-07 quality and watchdog upgrade
+
+This upgrade record excludes credentials, account identity, response bodies, and giveaway URLs.
+
+- The bot uses a browser-impersonating HTTP session and keeps authentication fields only in the ignored local settings file.
+- Eligibility is fixed at at least 80% positive reviews and 100 total Steam reviews; missing or malformed review data is skipped.
+- Deterministic point allocation maximizes spend without exceeding the available balance and recalculates after a failed entry.
+- Every terminal path writes an atomic mode-`0600` heartbeat with only counters, timestamps, status, reason code, and process ID.
+- The host watchdog checks Docker, container health, the local-only panel, the canonical hourly task, stale runs, and stuck processes.
+- Authentication blocking produces no restart or task-run action. Recovery actions are single-pass and rate-limited.
+- A local check-only watchdog pass reported `healthy` with the exact task name, schedule, command, and enabled state.
+- The macOS LaunchAgent template uses a 300-second interval, `RunAtLoad`, absolute runtime paths, and no credentials.
+- Automated verification passed 57 tests before the LaunchAgent installer additions; the final full-suite count is recorded during deployment.

@@ -30,6 +30,7 @@ SENSITIVE = re.compile(
     r"(?:cookie|token|php[a-z0-9_]*|clearance|https?://|[a-z0-9._%+-]+@[a-z0-9.-]+\.)",
     re.IGNORECASE,
 )
+DOCKER_BIN = os.environ.get("STEAMGIFTS_DOCKER_BIN", "docker")
 
 
 class Action(str, Enum):
@@ -233,7 +234,7 @@ def load_qinglong_token(project_dir: Path, command_runner, now: datetime) -> str
     if _token_expiration(payload) <= int(now.timestamp()) + 60:
         command_runner(
             [
-                "docker",
+                DOCKER_BIN,
                 "exec",
                 "steamgifts-qinglong",
                 "bash",
@@ -264,7 +265,7 @@ def perform_action(
         return
     if decision.action == Action.START_CONTAINER:
         command_runner(
-            ["docker", "compose", "up", "-d"],
+            [DOCKER_BIN, "compose", "up", "-d"],
             cwd=Path(project_dir),
             capture_output=True,
             text=True,
@@ -274,7 +275,7 @@ def perform_action(
         return
     if decision.action == Action.RESTART_CONTAINER:
         command_runner(
-            ["docker", "compose", "restart", "qinglong"],
+            [DOCKER_BIN, "compose", "restart", "qinglong"],
             cwd=Path(project_dir),
             capture_output=True,
             text=True,
@@ -495,7 +496,7 @@ def collect_snapshot(
     project_dir = Path(project_dir)
     now = clock()
     docker = command_runner(
-        ["docker", "info", "--format", "{{json .ServerVersion}}"],
+        [DOCKER_BIN, "info", "--format", "{{json .ServerVersion}}"],
         cwd=project_dir,
         capture_output=True,
         text=True,
@@ -506,7 +507,7 @@ def collect_snapshot(
         return _empty_snapshot(), None
 
     inspect = command_runner(
-        ["docker", "inspect", "steamgifts-qinglong", "--format", "{{json .State}}"],
+        [DOCKER_BIN, "inspect", "steamgifts-qinglong", "--format", "{{json .State}}"],
         cwd=project_dir,
         capture_output=True,
         text=True,
@@ -564,7 +565,7 @@ def collect_snapshot(
 
     process = command_runner(
         [
-            "docker",
+            DOCKER_BIN,
             "exec",
             "steamgifts-qinglong",
             "sh",
