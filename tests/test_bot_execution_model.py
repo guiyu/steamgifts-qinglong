@@ -22,6 +22,7 @@ class BotExecutionModelTests(unittest.TestCase):
         use_real_notify=False,
         add_blank_clearance=False,
         require_browser_client=False,
+        require_browser_navigation=False,
         response_url="https://www.steamgifts.com/account/settings/profile",
         return_heartbeat=False,
     ):
@@ -74,6 +75,25 @@ class BotExecutionModelTests(unittest.TestCase):
                     def get(*_args, **kwargs):
                         if any(value == "" for value in kwargs.get("cookies", {{}}).values()):
                             raise AssertionError("blank cookies must not be sent")
+                        if {require_browser_navigation!r}:
+                            cookies = kwargs.get("cookies", {{}})
+                            if "PHPSESSID" not in cookies or "phpsessid" in cookies:
+                                raise AssertionError("cookie names must preserve case")
+                            headers = {{key.lower(): value for key, value in kwargs.get("headers", {{}}).items()}}
+                            expected = {{
+                                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                                "accept-language": "zh-CN,zh;q=0.7",
+                                "dnt": "1",
+                                "priority": "u=0, i",
+                                "sec-fetch-dest": "document",
+                                "sec-fetch-mode": "navigate",
+                                "sec-fetch-site": "none",
+                                "sec-fetch-user": "?1",
+                                "sec-gpc": "1",
+                                "upgrade-insecure-requests": "1",
+                            }}
+                            if any(headers.get(key) != value for key, value in expected.items()):
+                                raise AssertionError("browser navigation headers are required")
                         return Response()
 
 
@@ -109,8 +129,8 @@ class BotExecutionModelTests(unittest.TestCase):
 
                     class Session:
                         def __init__(self, impersonate=None):
-                            if {require_browser_client!r} and impersonate != "chrome":
-                                raise AssertionError("Chrome impersonation is required")
+                            if {require_browser_client!r} and impersonate != "chrome150":
+                                raise AssertionError("Chrome 150 impersonation is required")
 
                         def get(self, *args, **kwargs):
                             return get(*args, **kwargs)
@@ -384,6 +404,13 @@ class BotExecutionModelTests(unittest.TestCase):
     def test_uses_browser_impersonation_client(self):
         result, _send_count = self.run_bot_with_response(
             require_browser_client=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_uses_browser_navigation_headers_and_preserves_cookie_case(self):
+        result, _send_count = self.run_bot_with_response(
+            require_browser_navigation=True,
         )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

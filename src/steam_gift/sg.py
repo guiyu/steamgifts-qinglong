@@ -324,7 +324,7 @@ def run_bot(context):
     global threshold, what_search
 
     notify_push = ""
-    requests = curl_requests.Session(impersonate="chrome")
+    requests = curl_requests.Session(impersonate="chrome150")
     set_notify("脚本启动", "——————————")
     time.sleep(60)
 
@@ -335,6 +335,20 @@ def run_bot(context):
         if value.strip()
     }
     headers = dict(settings._sections["user-agent"])
+    headers.update(
+        {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.7",
+            "DNT": "1",
+            "Priority": "u=0, i",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Sec-GPC": "1",
+            "Upgrade-Insecure-Requests": "1",
+        }
+    )
     need_giveaways_from_banners = int(
         settings["settings"]["giveaways_from_banners"]
     )
