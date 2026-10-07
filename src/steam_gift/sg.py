@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 import time
-import requests
+from curl_cffi import requests as curl_requests
 import random
 from bs4 import BeautifulSoup
 import re
@@ -8,6 +8,8 @@ import sys
 from subprocess import call
 import configparser
 from notify import send
+
+requests = curl_requests.Session(impersonate="chrome")
 
 version = "1.4.9"
 

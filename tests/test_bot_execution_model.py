@@ -21,6 +21,7 @@ class BotExecutionModelTests(unittest.TestCase):
         response_text="",
         use_real_notify=False,
         add_blank_clearance=False,
+        require_browser_client=False,
     ):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
@@ -28,6 +29,7 @@ class BotExecutionModelTests(unittest.TestCase):
             fakes = temp / "fakes"
             runtime.mkdir()
             (fakes / "bs4").mkdir(parents=True)
+            (fakes / "curl_cffi").mkdir(parents=True)
 
             for name in (
                 "sg.py",
@@ -52,9 +54,8 @@ class BotExecutionModelTests(unittest.TestCase):
                 "import time\ntime.sleep = lambda _seconds: None\n",
                 encoding="utf-8",
             )
-            (fakes / "requests.py").write_text(
-                textwrap.dedent(
-                    f"""
+            http_fixture = textwrap.dedent(
+                f"""
                     class Response:
                         status_code = {status_code}
                         text = {response_text!r}
@@ -77,6 +78,43 @@ class BotExecutionModelTests(unittest.TestCase):
 
                     def post(*_args, **_kwargs):
                         raise AssertionError("fixture has no eligible giveaways")
+                    """
+            )
+            (fakes / "http_fixture.py").write_text(
+                http_fixture,
+                encoding="utf-8",
+            )
+            (fakes / "requests.py").write_text(
+                (
+                    'raise AssertionError("plain requests must not be imported")\n'
+                    if require_browser_client
+                    else "from http_fixture import *\n"
+                ),
+                encoding="utf-8",
+            )
+            (fakes / "curl_cffi" / "__init__.py").write_text(
+                "from . import requests\n",
+                encoding="utf-8",
+            )
+            (fakes / "curl_cffi" / "requests.py").write_text(
+                textwrap.dedent(
+                    f"""
+                    from http_fixture import get, head, post
+
+
+                    class Session:
+                        def __init__(self, impersonate=None):
+                            if {require_browser_client!r} and impersonate != "chrome":
+                                raise AssertionError("Chrome impersonation is required")
+
+                        def get(self, *args, **kwargs):
+                            return get(*args, **kwargs)
+
+                        def head(self, *args, **kwargs):
+                            return head(*args, **kwargs)
+
+                        def post(self, *args, **kwargs):
+                            return post(*args, **kwargs)
                     """
                 ),
                 encoding="utf-8",
@@ -172,6 +210,13 @@ class BotExecutionModelTests(unittest.TestCase):
 
     def test_blank_optional_cookie_is_not_sent(self):
         result, _send_count = self.run_bot_with_response(add_blank_clearance=True)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_uses_browser_impersonation_client(self):
+        result, _send_count = self.run_bot_with_response(
+            require_browser_client=True,
+        )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

@@ -20,7 +20,7 @@ class ContainerRuntimeTests(unittest.TestCase):
                     "python3",
                     IMAGE,
                     "-c",
-                    "import requests, bs4",
+                    "import requests, bs4, curl_cffi",
                 ],
                 capture_output=True,
                 text=True,
