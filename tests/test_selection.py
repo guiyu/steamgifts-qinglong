@@ -6,6 +6,7 @@ from pathlib import Path
 SOURCE = Path(__file__).resolve().parents[1] / "src" / "steam_gift"
 sys.path.insert(0, str(SOURCE))
 
+import selection
 from selection import (
     Candidate,
     ReviewSummary,
@@ -146,6 +147,75 @@ class AllocationTests(unittest.TestCase):
 
         self.assertEqual([candidate.code for candidate in selected], ["aaaaa"])
         self.assertEqual(candidates, original)
+
+    def test_keeps_preferred_tier_when_it_already_reaches_target(self):
+        selector = getattr(selection, "select_candidates_for_target", None)
+        self.assertIsNotNone(selector)
+        candidates = [
+            self.candidate("strict", 60, percent=80),
+            self.candidate("lower", 40, percent=75),
+        ]
+
+        selected, threshold = selector(
+            candidates,
+            budget=100,
+            preferred_percent=80,
+            minimum_percent=70,
+            min_reviews=100,
+            target_remaining=50,
+        )
+
+        self.assertEqual([candidate.code for candidate in selected], ["strict"])
+        self.assertEqual(threshold, 80)
+
+    def test_relaxes_in_five_point_steps_until_target_is_reached(self):
+        selector = getattr(selection, "select_candidates_for_target", None)
+        self.assertIsNotNone(selector)
+        candidates = [
+            self.candidate("strict", 50, percent=80),
+            self.candidate("middle", 20, percent=75),
+            self.candidate("floor", 30, percent=70),
+        ]
+
+        selected, threshold = selector(
+            candidates,
+            budget=100,
+            preferred_percent=80,
+            minimum_percent=70,
+            min_reviews=100,
+            target_remaining=50,
+        )
+
+        self.assertEqual(
+            [candidate.code for candidate in selected],
+            ["strict", "middle"],
+        )
+        self.assertEqual(threshold, 75)
+
+    def test_hard_floor_still_applies_when_target_is_unreachable(self):
+        selector = getattr(selection, "select_candidates_for_target", None)
+        self.assertIsNotNone(selector)
+        candidates = [
+            self.candidate("strict", 10, percent=80),
+            self.candidate("floor", 20, percent=70),
+            self.candidate("garbage", 70, percent=69),
+            self.candidate("too_few", 70, percent=70, reviews=99),
+        ]
+
+        selected, threshold = selector(
+            candidates,
+            budget=100,
+            preferred_percent=80,
+            minimum_percent=70,
+            min_reviews=100,
+            target_remaining=50,
+        )
+
+        self.assertEqual(
+            [candidate.code for candidate in selected],
+            ["floor", "strict"],
+        )
+        self.assertEqual(threshold, 70)
 
 
 if __name__ == "__main__":

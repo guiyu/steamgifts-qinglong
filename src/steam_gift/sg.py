@@ -12,12 +12,22 @@ from pathlib import Path
 from notify import send
 from heartbeat import Heartbeat, write_heartbeat
 from reviews import SteamReviewCatalog, extract_app_id
-from selection import Candidate, is_qualified, select_candidates
+from selection import (
+    Candidate,
+    is_qualified,
+    select_candidates,
+    select_candidates_for_target,
+)
 
 requests = None
 notify_push = ""
 
 version = "1.4.9"
+
+MIN_PREFERRED_POSITIVE_PERCENT = 80
+MIN_POSITIVE_PERCENT = 70
+MIN_REVIEW_COUNT = 100
+MAX_TARGET_REMAINING_POINTS = 50
 
 
 class AuthenticationBlocked(Exception):
@@ -156,13 +166,32 @@ def get_game_links(requests_result):
         candidate_by_code.setdefault(candidate.code, candidate)
 
 
-def enter_qualified_candidates(candidates, budget):
+def enter_qualified_candidates(
+    candidates,
+    budget,
+    preferred_percent=None,
+    minimum_percent=None,
+    min_reviews=None,
+    target_remaining=None,
+):
     """Enter an optimal set and re-plan after every failed attempt."""
     remaining = {candidate.code: candidate for candidate in candidates}
     selected_count = 0
     entered_count = 0
     while remaining and budget > 0:
-        selected = select_candidates(list(remaining.values()), budget)
+        if preferred_percent is None:
+            selected = select_candidates(list(remaining.values()), budget)
+        else:
+            selected, used_threshold = select_candidates_for_target(
+                list(remaining.values()),
+                budget=budget,
+                preferred_percent=preferred_percent,
+                minimum_percent=minimum_percent,
+                min_reviews=min_reviews,
+                target_remaining=target_remaining,
+            )
+            if selected and used_threshold < preferred_percent:
+                print(f"为降低剩余点数，好评率门槛放宽到 {used_threshold}%")
         if not selected:
             break
         for candidate in selected:
@@ -321,7 +350,8 @@ def run_bot(context):
     global entered_url, forbidden_words, func_list, giveaways_from_banner
     global good_words, headers, min_positive_percent, min_review_count
     global need_giveaways_from_banners, notify_push, requests, review_catalog
-    global threshold, what_search
+    global preferred_positive_percent, target_remaining_points, threshold
+    global what_search
 
     notify_push = ""
     requests = curl_requests.Session(impersonate="chrome150")
@@ -353,8 +383,23 @@ def run_bot(context):
         settings["settings"]["giveaways_from_banners"]
     )
     threshold = int(settings["settings"]["threshold"])
-    min_positive_percent = int(settings["settings"]["min_positive_percent"])
-    min_review_count = int(settings["settings"]["min_review_count"])
+    min_positive_percent = max(
+        int(settings["settings"]["min_positive_percent"]),
+        MIN_POSITIVE_PERCENT,
+    )
+    preferred_positive_percent = max(
+        int(settings["settings"]["preferred_positive_percent"]),
+        MIN_PREFERRED_POSITIVE_PERCENT,
+        min_positive_percent,
+    )
+    min_review_count = max(
+        int(settings["settings"]["min_review_count"]),
+        MIN_REVIEW_COUNT,
+    )
+    target_remaining_points = min(
+        int(settings["settings"]["target_remaining_points"]),
+        MAX_TARGET_REMAINING_POINTS,
+    )
 
     func_list = []
     for mode in ("wishlist", "search_list", "recommended", "group", "random_list"):
@@ -438,7 +483,12 @@ def run_bot(context):
             print(f"跳过未达到评测门槛的赠品: {candidate.code}")
 
     coins, selected_count, entered_count = enter_qualified_candidates(
-        qualified_candidates, coins
+        qualified_candidates,
+        coins,
+        preferred_percent=preferred_positive_percent,
+        minimum_percent=min_positive_percent,
+        min_reviews=min_review_count,
+        target_remaining=target_remaining_points,
     )
     context["selected_count"] = selected_count
     context["entered_count"] = entered_count

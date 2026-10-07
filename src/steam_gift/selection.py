@@ -92,3 +92,29 @@ def select_candidates(
 
     best_spend = max(states)
     return sorted(states[best_spend], key=lambda item: (-item.points, item.code))
+
+
+def select_candidates_for_target(
+    candidates: Sequence[Candidate],
+    budget: int,
+    preferred_percent: int,
+    minimum_percent: int,
+    min_reviews: int,
+    target_remaining: int,
+) -> tuple[list[Candidate], int]:
+    threshold = preferred_percent
+    while True:
+        qualified = [
+            candidate
+            for candidate in candidates
+            if is_qualified(
+                candidate.review,
+                min_percent=threshold,
+                min_reviews=min_reviews,
+            )
+        ]
+        selected = select_candidates(qualified, budget)
+        remaining = budget - sum(candidate.points for candidate in selected)
+        if remaining < target_remaining or threshold == minimum_percent:
+            return selected, threshold
+        threshold = max(minimum_percent, threshold - 5)

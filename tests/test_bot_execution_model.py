@@ -220,7 +220,20 @@ class BotExecutionModelTests(unittest.TestCase):
                 return result, count_file.read_text(encoding="utf-8"), heartbeat
             return result, count_file.read_text(encoding="utf-8")
 
-    def run_quality_scenario(self, review_failure=False):
+    def run_quality_scenario(
+        self,
+        review_failure=False,
+        preferred_percent=80,
+        minimum_percent=80,
+        min_reviews=100,
+        target_remaining=50,
+        low_positive=79,
+        low_reviews=100,
+        starting_points=400,
+        good_points=3,
+        low_points=3,
+        post_points=397,
+    ):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             runtime = temp / "runtime"
@@ -245,8 +258,10 @@ class BotExecutionModelTests(unittest.TestCase):
             for mode in ("group", "recommended", "search_list", "random_list"):
                 config["settings"][mode] = "0"
             config["settings"]["wishlist"] = "1"
-            config["settings"]["min_positive_percent"] = "80"
-            config["settings"]["min_review_count"] = "100"
+            config["settings"]["preferred_positive_percent"] = str(preferred_percent)
+            config["settings"]["min_positive_percent"] = str(minimum_percent)
+            config["settings"]["min_review_count"] = str(min_reviews)
+            config["settings"]["target_remaining_points"] = str(target_remaining)
             with (runtime / "settings.cfg").open("w", encoding="utf-8") as file:
                 config.write(file)
             (runtime / "won.txt").write_text("0", encoding="utf-8")
@@ -275,15 +290,15 @@ class BotExecutionModelTests(unittest.TestCase):
                     + repr(
                         """
                         <html><body>
-                          <div class="nav__points">400</div>
+                          <div class="nav__points">__STARTING_POINTS__</div>
                           <div class="giveaway__row-outer-wrap">
                             <a class="giveaway__heading__name" href="/giveaway/good1/good-game">Good Game</a>
-                            <span class="giveaway__heading__thin">(3P)</span>
+                            <span class="giveaway__heading__thin">(__GOOD_POINTS__P)</span>
                             <a href="https://store.steampowered.com/app/101?utm_source=SteamGifts">Steam</a>
                           </div>
                           <div class="giveaway__row-outer-wrap">
                             <a class="giveaway__heading__name" href="/giveaway/low01/low-game">Low Game</a>
-                            <span class="giveaway__heading__thin">(3P)</span>
+                            <span class="giveaway__heading__thin">(__LOW_POINTS__P)</span>
                             <a href="https://store.steampowered.com/app/202">Steam</a>
                           </div>
                         </body></html>
@@ -320,12 +335,13 @@ class BotExecutionModelTests(unittest.TestCase):
                                 record(f"review:{app_id}")
                                 if REVIEW_FAILURE:
                                     raise RuntimeError("review service unavailable")
-                                positive = 90 if app_id == 101 else 79
+                                positive = 90 if app_id == 101 else __LOW_POSITIVE__
+                                total_reviews = 100 if app_id == 101 else __LOW_REVIEWS__
                                 return Response(payload={
                                     "success": 1,
                                     "query_summary": {
                                         "total_positive": positive,
-                                        "total_reviews": 100,
+                                        "total_reviews": total_reviews,
                                     },
                                 })
                             if "/account/settings/profile" in url:
@@ -344,9 +360,16 @@ class BotExecutionModelTests(unittest.TestCase):
 
                         def post(self, _url, data=None, **_kwargs):
                             record(f"post:{data['code']}")
-                            return Response(payload={"type": "success", "points": 397})
+                            return Response(payload={"type": "success", "points": __POST_POINTS__})
                     """
-                ).replace("__REVIEW_FAILURE__", repr(review_failure)),
+                )
+                .replace("__REVIEW_FAILURE__", repr(review_failure))
+                .replace("__LOW_POSITIVE__", repr(low_positive))
+                .replace("__LOW_REVIEWS__", repr(low_reviews))
+                .replace("__STARTING_POINTS__", str(starting_points))
+                .replace("__GOOD_POINTS__", str(good_points))
+                .replace("__LOW_POINTS__", str(low_points))
+                .replace("__POST_POINTS__", str(post_points)),
                 encoding="utf-8",
             )
 
@@ -428,8 +451,16 @@ class BotExecutionModelTests(unittest.TestCase):
         config = configparser.ConfigParser()
         config.read(SOURCE / "settings.cfg.example")
 
-        self.assertEqual(config.getint("settings", "min_positive_percent"), 80)
+        self.assertEqual(
+            config.getint("settings", "preferred_positive_percent", fallback=-1),
+            80,
+        )
+        self.assertEqual(config.getint("settings", "min_positive_percent"), 70)
         self.assertEqual(config.getint("settings", "min_review_count"), 100)
+        self.assertEqual(
+            config.getint("settings", "target_remaining_points", fallback=-1),
+            50,
+        )
 
     def test_collects_all_reviews_before_entering_only_qualified_game(self):
         result, events, _heartbeat = self.run_quality_scenario()
@@ -440,6 +471,47 @@ class BotExecutionModelTests(unittest.TestCase):
         self.assertEqual([event for event in events if event.startswith("post:")], ["post:good1"])
         first_post = next(index for index, event in enumerate(events) if event.startswith("post:"))
         self.assertTrue(all(event.startswith("review:") for event in events[:first_post]))
+
+    def test_keeps_strict_tier_when_it_can_reach_target(self):
+        result, events, _heartbeat = self.run_quality_scenario(
+            minimum_percent=70,
+            starting_points=100,
+            good_points=60,
+            post_points=40,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            [event for event in events if event.startswith("post:")],
+            ["post:good1"],
+        )
+
+    def test_configuration_cannot_weaken_quality_hard_floors(self):
+        result, events, _heartbeat = self.run_quality_scenario(
+            preferred_percent=60,
+            minimum_percent=60,
+            min_reviews=1,
+            low_positive=69,
+            low_reviews=99,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            [event for event in events if event.startswith("post:")],
+            ["post:good1"],
+        )
+
+    def test_configuration_cannot_raise_remaining_points_target(self):
+        result, events, _heartbeat = self.run_quality_scenario(
+            minimum_percent=70,
+            target_remaining=500,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            [event for event in events if event.startswith("post:")],
+            ["post:good1", "post:low01"],
+        )
 
     def test_writes_success_and_no_eligible_terminal_statuses(self):
         success, _events, success_heartbeat = self.run_quality_scenario()

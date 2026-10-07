@@ -65,7 +65,7 @@ This upgrade record excludes credentials, account identity, response bodies, and
 
 - The bot uses a browser-impersonating HTTP session and keeps authentication fields only in the ignored local settings file.
 - The live Cloudflare path requires the explicit `chrome150` fingerprint plus browser navigation headers; the authenticated profile and giveaway listing both returned HTTP `200` after this combination was applied.
-- Eligibility is fixed at at least 80% positive reviews and 100 total Steam reviews; missing or malformed review data is skipped.
+- Eligibility requires at least 70% positive reviews and 100 total Steam reviews; missing or malformed review data is skipped. Selection starts at 80%, then relaxes to 75% and 70% only when needed to target a remaining balance below 50 points.
 - Deterministic point allocation maximizes spend without exceeding the available balance and recalculates after a failed entry.
 - Every terminal path writes an atomic mode-`0600` heartbeat with only counters, timestamps, status, reason code, and process ID.
 - The host watchdog checks Docker, container health, the local-only panel, the canonical hourly task, stale runs, and stuck processes.
@@ -73,7 +73,7 @@ This upgrade record excludes credentials, account identity, response bodies, and
 - A local check-only watchdog pass reported `healthy` with the exact task name, schedule, command, and enabled state.
 - The macOS LaunchAgent template uses a 300-second interval, `RunAtLoad`, absolute runtime paths, and no credentials.
 - The installed LaunchAgent reported a 300-second interval, seven completed runs, and last exit code `0`.
-- The final automated verification passed all 61 tests.
+- The final automated verification passed all 67 tests.
 
 The controlled live run completed naturally with exit code `0` and a terminal `success/completed` heartbeat:
 
@@ -86,3 +86,11 @@ The controlled live run completed naturally with exit code `0` and a terminal `s
 - Uncaught tracebacks: `0`
 
 All qualified candidates found during the successful scans were entered. The random listing had one transient request failure and performed its existing 300-second backoff; an immediate read-only retry returned HTTP `200` with giveaway rows present, so the enabled hourly task can retry that source without operator action.
+
+## 2026-10-07 progressive quality threshold verification
+
+- Selection prefers at least 80% positive reviews, then may relax to 75% and 70% only when the stricter tier cannot leave fewer than 50 points.
+- Runtime policy bounds prevent configuration from weakening the 80% preference, 70% hard floor, 100-review minimum, or fewer-than-50-points target.
+- The full automated suite passed all 67 tests, including exact-target, hard-floor, unsafe-configuration, and integration coverage.
+- A scheduled live run completed with `success/completed`: points changed from `284` to `0`, 34 candidates met the hard eligibility rules, 23 entries were attempted, and 22 succeeded.
+- The run emitted no threshold-relaxation message, so the available 80% tier alone was sufficient; no residual `sg.py` process remained.
